@@ -21,10 +21,10 @@ anything else remote.
 
 - **Remote** — every git workspace gets a **Sync local** button that creates
   or refreshes its mirror on your local host.
-- **Local** — mirror workspaces get a **Mirror** badge warning that edits
-  belong on the remote. When the server workspace changes it becomes
-  **Sync changes (n)**, and pressing it pulls them in. Other workspaces are
-  left alone.
+- **Local** — mirror workspaces get a **Mirror** warning badge: changes made
+  there are not synced back. A **Pull n** button appears only while the server
+  workspace has changes; one click brings them in. With local edits at stake
+  it asks first. Other workspaces are left alone.
 
 ## How it works
 
@@ -54,8 +54,8 @@ Your local setup script owns its own `.env`.
 **One-way.** Each sync resets the local worktree to the server's state; local
 edits there are overwritten (ignored files are kept). Only worktrees this plugin
 created are ever reset; it refuses to touch your main checkout. The mirror's
-popover counts local edits and turns the button into *Discard edits and sync*. If the branch is
-already checked out locally, the worktree uses `sync/<branch>`.
+badge counts local edits, and pulling over them needs a confirm. If the branch
+is already checked out locally, the worktree uses `sync/<branch>`.
 
 **Running things on your machine.** The app borrows your local host's API
 (`getPaseoClient`) and runs each step in a short-lived terminal there, which is

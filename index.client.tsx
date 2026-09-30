@@ -1,9 +1,15 @@
-import { getPaseoClient, type PluginButtonRegistration, type PluginClientContext } from "@getpaseo/plugin/client";
+import {
+  getPaseoClient,
+  openExternalUrl,
+  type PluginButtonContentProps,
+  type PluginButtonRegistration,
+  type PluginClientContext,
+} from "@getpaseo/plugin/client";
 import { MirrorPopover } from "./client/mirror-popover";
 import { SyncPopover } from "./client/popover";
 import { onRoleChange } from "./client/role";
 import { SyncSettings } from "./client/settings";
-import { checkMirror, getMirror, getSettings, type Check, type Mirror, type Role } from "./shared/contracts";
+import { checkMirror, getMirror, getSettings, pullMirror, type Check, type Mirror, type Role } from "./shared/contracts";
 
 interface WorkspaceEntry {
   id: string;
@@ -83,45 +89,146 @@ function remoteButtons(client: PluginClientContext): () => void {
 
 const CHECK_EVERY_MS = 2 * 60_000;
 const SERVER_CHANGE_DEBOUNCE_MS = 3_000;
+const PULL_POLL_MS = 1_000;
+
+const files = (n: number) => `${n} file${n === 1 ? "" : "s"}`;
 
 interface MirrorButton {
-  registration: PluginButtonRegistration;
   directory: string;
   mirror: Mirror;
+  /** Always there: says this is a mirror and that edits are not synced back. */
+  badge: PluginButtonRegistration;
+  /** Only visible when the server has changes to pull. */
+  pull: PluginButtonRegistration;
+  check: Check | null;
+  pulling: boolean;
+  pullAuthUrl: string | null;
+  pullError: string | null;
   pending: ReturnType<typeof setTimeout> | null;
-  /** Tailscale wants a browser login; stop checking until the popover succeeds. */
-  paused: boolean;
 }
 
 /**
- * Local role: mirror workspaces get a warning badge that turns into
- * "Sync changes (n)" when the server workspace moves on. Other workspaces
- * are left alone.
+ * Local role. Each mirror workspace gets two header buttons:
+ *   - a warning badge: this is a mirror, edits here are not synced back
+ *   - "Pull (n)", only while the server workspace has changes to bring over
+ * Other workspaces are left alone.
  */
 function mirrorButtons(client: PluginClientContext): () => void {
   const buttons = new Map<string, MirrorButton>();
   const serverFeeds = new Map<string, () => void>();
   let stopped = false;
 
-  function present(entry: MirrorButton, check: Check | null) {
+  const popover = (entry: MirrorButton) => ({
+    kind: "popover" as const,
+    Content: (props: PluginButtonContentProps) => (
+      <MirrorPopover
+        {...props}
+        workspaceDirectory={entry.directory}
+        onChecked={(check) => {
+          entry.check = check;
+          render(entry);
+        }}
+      />
+    ),
+  });
+
+  function render(entry: MirrorButton) {
     const server = entry.mirror.serverLabel.replace(/\.local$/, "");
-    const changes = check?.remoteChanges ?? 0;
-    entry.paused = Boolean(check?.authUrl);
-    entry.registration.update({
-      label: changes > 0 ? `Sync changes (${changes})` : "Mirror",
-      title:
-        changes > 0
-          ? `${changes} file${changes === 1 ? "" : "s"} changed on ${server} since the last sync`
-          : `Local mirror of ${entry.mirror.branch} on ${server}. Edit there; syncing overwrites this worktree.`,
+    const changes = entry.check?.remoteChanges ?? 0;
+    const edits = entry.check?.localEdits ?? 0;
+
+    entry.badge.update({
+      label: edits > 0 ? `Mirror · ${edits} local edit${edits === 1 ? "" : "s"}` : "Mirror",
+      title: `Local mirror of ${entry.mirror.branch} on ${server}. Changes made here are not synced back, and the next pull overwrites them.`,
     });
+
+    const authUrl = entry.pullAuthUrl ?? entry.check?.authUrl ?? null;
+    if (entry.pulling) {
+      entry.pull.update({
+        visible: true,
+        disabled: !entry.pullAuthUrl,
+        label: entry.pullAuthUrl ? "Sign in to pull" : "Pulling…",
+        title: entry.pullAuthUrl ? "Tailscale SSH wants a browser login; the pull continues after." : `Pulling from ${server}`,
+        behavior: { kind: "action", onPress: () => void openExternalUrl(entry.pullAuthUrl ?? "") },
+      });
+    } else if (entry.pullError) {
+      entry.pull.update({ visible: true, disabled: false, label: "Pull failed", title: entry.pullError, behavior: popover(entry) });
+    } else if (authUrl && changes === 0) {
+      // Checks cannot reach the server until you sign in.
+      entry.pull.update({
+        visible: true,
+        disabled: false,
+        label: "Sign in to check",
+        title: `Tailscale SSH wants a browser login before ${server} can be checked.`,
+        behavior: {
+          kind: "action",
+          onPress: () => {
+            void openExternalUrl(authUrl);
+            if (entry.check) entry.check = { ...entry.check, authUrl: null };
+            scheduleCheck(entry, 15_000);
+          },
+        },
+      });
+    } else if (changes > 0) {
+      entry.pull.update({
+        visible: true,
+        disabled: false,
+        label: `Pull ${changes}`,
+        title:
+          edits > 0
+            ? `${files(changes)} changed on ${server}. Pulling discards your ${files(edits)} edited here.`
+            : `${files(changes)} changed on ${server}. Pull them into this mirror.`,
+        // With local edits at stake, confirm in the popover instead of pulling on one click.
+        behavior: edits > 0 ? popover(entry) : { kind: "action", onPress: () => startPull(entry) },
+      });
+    } else {
+      entry.pull.update({ visible: false });
+    }
+  }
+
+  function startPull(entry: MirrorButton) {
+    if (entry.pulling) return;
+    entry.pulling = true;
+    entry.pullError = null;
+    entry.pullAuthUrl = null;
+    render(entry);
+    const finish = (error: string | null) => {
+      entry.pulling = false;
+      entry.pullAuthUrl = null;
+      entry.pullError = error;
+      render(entry);
+      runCheck(entry);
+    };
+    const poll = () => {
+      if (stopped) return;
+      void client
+        .rpc(getMirror, { workspaceDirectory: entry.directory })
+        .then(({ pull }) => {
+          if (pull.running) {
+            if (pull.authUrl !== entry.pullAuthUrl) {
+              entry.pullAuthUrl = pull.authUrl;
+              render(entry);
+            }
+            setTimeout(poll, PULL_POLL_MS);
+          } else finish(pull.error);
+        })
+        .catch((error: unknown) => finish(String(error)));
+    };
+    void client
+      .rpc(pullMirror, { workspaceDirectory: entry.directory })
+      .then(() => setTimeout(poll, PULL_POLL_MS))
+      .catch((error: unknown) => finish(String(error)));
   }
 
   function runCheck(entry: MirrorButton) {
-    if (stopped || entry.paused) return;
+    // Waiting on a Tailscale login: pressing "Sign in to check" resumes.
+    if (stopped || entry.pulling || entry.check?.authUrl) return;
     void client
       .rpc(checkMirror, { workspaceDirectory: entry.directory })
       .then((check) => {
-        if (buttons.get(entry.mirror.serverWorkspaceId) === entry) present(entry, check);
+        if (buttons.get(entry.mirror.serverWorkspaceId) !== entry) return;
+        entry.check = check;
+        render(entry);
       })
       .catch(() => undefined);
   }
@@ -160,7 +267,8 @@ function mirrorButtons(client: PluginClientContext): () => void {
     const entry = key ? buttons.get(key) : undefined;
     if (!key || !entry) return;
     if (entry.pending) clearTimeout(entry.pending);
-    entry.registration.remove();
+    entry.badge.remove();
+    entry.pull.remove();
     buttons.delete(key);
   }
 
@@ -177,37 +285,30 @@ function mirrorButtons(client: PluginClientContext): () => void {
         remove(workspace.id);
         if (!mirror) return;
 
+        const noop = { kind: "action" as const, onPress: () => undefined };
         const entry: MirrorButton = {
           directory,
           mirror,
+          check: null,
+          pulling: false,
+          pullAuthUrl: null,
+          pullError: null,
           pending: null,
-          paused: false,
-          registration: client.addHeaderButton({
+          pull: client.addHeaderButton({
+            id: "local-sync-pull",
+            workspaceId: workspace.id,
+            button: { title: "Pull", icon: "ArrowDownToLine", label: "Pull", visible: false, behavior: noop },
+          }),
+          badge: client.addHeaderButton({
             id: "local-sync-mirror",
             workspaceId: workspace.id,
-            button: {
-              title: "",
-              icon: "MonitorDown",
-              label: "Mirror",
-              behavior: {
-                kind: "popover",
-                Content: (props) => (
-                  <MirrorPopover
-                    {...props}
-                    workspaceDirectory={directory}
-                    onChecked={(check) => {
-                      const current = buttons.get(mirror.serverWorkspaceId);
-                      if (current) present(current, check);
-                    }}
-                  />
-                ),
-              },
-            },
+            button: { title: "Mirror", icon: "AlertTriangle", label: "Mirror", behavior: noop },
           }),
         };
+        entry.badge.update({ behavior: popover(entry) });
         buttons.set(mirror.serverWorkspaceId, entry);
         localIds.set(workspace.id, mirror.serverWorkspaceId);
-        present(entry, null);
+        render(entry);
         watchServer(mirror.serverId);
         scheduleCheck(entry, 2_000);
       })
@@ -230,7 +331,8 @@ function mirrorButtons(client: PluginClientContext): () => void {
     serverFeeds.clear();
     for (const entry of buttons.values()) {
       if (entry.pending) clearTimeout(entry.pending);
-      entry.registration.remove();
+      entry.badge.remove();
+      entry.pull.remove();
     }
     buttons.clear();
   };

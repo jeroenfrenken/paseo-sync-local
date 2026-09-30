@@ -104,9 +104,10 @@ export function MirrorPopover(props: MirrorPopoverProps) {
           backgroundColor: `${WARN}1f`,
         }}
       >
-        <Text style={{ color: ink, fontSize: 12, fontWeight: "600" }}>▲ Local mirror — edit on {server}</Text>
+        <Text style={{ color: ink, fontSize: 12, fontWeight: "600" }}>▲ Local mirror: edit on {server}</Text>
         <Text style={{ color: ink, fontSize: 11 }}>
-          This worktree mirrors {mirror.branch} on {server}. Make changes there; every sync overwrites this worktree.
+          This worktree mirrors {mirror.branch} on {server}. Changes made here are not synced back to {server}, and
+          every pull overwrites them. Ignored files like .env stay.
         </Text>
       </View>
 
@@ -190,7 +191,7 @@ export function MirrorPopover(props: MirrorPopoverProps) {
               fontWeight: "600",
             }}
           >
-            {running ? "Syncing…" : localEdits > 0 ? "Discard edits and sync" : remote ? "Sync changes" : "Sync now"}
+            {running ? "Pulling…" : localEdits > 0 ? "Discard edits and pull" : remote ? `Pull ${remote}` : "Pull now"}
           </Text>
         </Pressable>
         {running || checking ? <ActivityIndicator color={muted} /> : null}
