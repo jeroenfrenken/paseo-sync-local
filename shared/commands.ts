@@ -29,10 +29,17 @@ export function manifestCommand(serverDirectory: string, script: string, base: s
 export const DEPENDENCY_FILES = /(^|\/)(package\.json|pnpm-lock\.yaml|package-lock\.json|yarn\.lock|bun\.lockb?)$/;
 
 /** Starts every mirror workspace's title, so it reads as a copy in the sidebar. */
-export const MIRROR_TITLE_PREFIX = "[CLONE]";
+export const MIRROR_TITLE_PREFIX = "[MIRROR]";
 
-export const mirrorTitle = (title: string) =>
-  title.startsWith(MIRROR_TITLE_PREFIX) ? title : `${MIRROR_TITLE_PREFIX} ${title}`;
+/** Earlier prefixes, swapped for the current one. */
+const LEGACY_PREFIXES = ["[CLONE]"];
+
+export function mirrorTitle(title: string): string {
+  if (title.startsWith(MIRROR_TITLE_PREFIX)) return title;
+  const legacy = LEGACY_PREFIXES.find((prefix) => title.startsWith(prefix));
+  const rest = legacy ? title.slice(legacy.length).trimStart() : title;
+  return `${MIRROR_TITLE_PREFIX} ${rest}`;
+}
 
 export const MIRROR_FILE = "paseo-sync.json";
 export const MANIFEST_FILE = "paseo-sync.manifest";

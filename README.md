@@ -28,7 +28,7 @@ anything else remote.
   them in. With local edits at stake it drops down a single *Discard and pull*
   item instead. Archiving the workspace on the remote archives its mirror too,
   unless the mirror has local edits; then the badge says so and leaves it to
-  you. Mirror workspaces are titled `[CLONE] <branch>`. Other workspaces are
+  you. Mirror workspaces are titled `[MIRROR] <branch>`. Other workspaces are
   left alone.
 
 ## How it works
