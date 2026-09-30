@@ -1,0 +1,6 @@
+{
+  "id": "local-sync",
+  "requirements": {
+    "paseo": ">=0.9.0"
+  }
+}

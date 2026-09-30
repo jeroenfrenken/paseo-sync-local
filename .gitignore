@@ -1,0 +1,15 @@
+node_modules/
+
+# Runtime state lives in ~/.config/paseo-local-sync, never in the repo.
+state.json
+
+# Credentials of any shape
+*.pem
+*.key
+*.crt
+*.p12
+.env
+.env.*
+
+*.log
+.DS_Store
