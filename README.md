@@ -19,12 +19,14 @@ Each host is either **remote** (where you work) or **local** (where you test),
 set in **Settings → Sync to local**. *Auto* makes macOS and Windows local and
 anything else remote.
 
-- **Remote** — every git workspace gets a **Sync local** button that creates
-  or refreshes its mirror on your local host.
+- **Remote** — every git workspace gets a **Sync local** button. One click
+  creates or refreshes its mirror on your local host; the label shows the
+  progress and result, the tooltip the details.
 - **Local** — mirror workspaces get a **Mirror** warning badge: changes made
-  there are not synced back. A **Pull n** button appears only while the server
-  workspace has changes; one click brings them in. With local edits at stake
-  it asks first. Other workspaces are left alone.
+  there are not synced back (click it to check the server now). A **Pull n**
+  button appears only while the server workspace has changes; one click brings
+  them in. With local edits at stake it drops down a single *Discard and pull*
+  item instead. Other workspaces are left alone.
 
 ## How it works
 
@@ -59,8 +61,8 @@ is already checked out locally, the worktree uses `sync/<branch>`.
 
 **Running things on your machine.** The app borrows your local host's API
 (`getPaseoClient`) and runs each step in a short-lived terminal there, which is
-killed when the step finishes. If Tailscale SSH asks you to sign in, the popover
-shows the login link.
+killed when the step finishes. If Tailscale SSH asks you to sign in, the button
+turns into *Sign in to sync*, which opens the login page.
 
 ## Settings
 
