@@ -15,6 +15,7 @@ import {
   type PluginButtonRegistration,
   type PluginClientContext,
 } from "@getpaseo/plugin/client";
+import { MIRROR_TITLE_PREFIX, mirrorTitle } from "../shared/commands";
 import { checkMirror, getMirror, pullMirror, type Check, type Mirror } from "../shared/contracts";
 import { errorText, files, followWorkspaces, shortHost, type WorkspaceEntry, type WorkspaceFeed } from "./workspaces";
 
@@ -274,6 +275,18 @@ export function mirrorButtons(client: PluginClientContext): () => void {
     }
   }
 
+  /** Mirrors made before the title prefix existed get it once they are seen. */
+  function labelAsMirror(workspace: WorkspaceEntry, mirror: Mirror) {
+    const current = workspace.title || workspace.name || mirror.branch;
+    if (current.startsWith(MIRROR_TITLE_PREFIX)) return;
+    const handle = (client.paseo.workspaces as unknown as {
+      ref(id: string): { setTitle(title: string): Promise<unknown> };
+    }).ref(workspace.id);
+    void handle.setTitle(mirrorTitle(current)).catch((error: unknown) => {
+      console.warn("[local-sync] could not set mirror title", error);
+    });
+  }
+
   const localIds = new Map<string, string>(); // local workspace id → server workspace id
 
   function dispose(entry: Entry) {
@@ -335,6 +348,7 @@ export function mirrorButtons(client: PluginClientContext): () => void {
         scheduleCheck(entry, 2_000);
         // Catch up on archives that happened while this app was closed.
         void followArchive(entry);
+        labelAsMirror(workspace, mirror);
       })
       .catch((error: unknown) => console.warn("[local-sync] could not read mirror", error));
   }

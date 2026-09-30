@@ -5,6 +5,7 @@ import {
   SSH_OPTS,
   listDeletedCommand,
   manifestCommand,
+  mirrorTitle,
   q,
   tarChangedCommand,
 } from "../shared/commands";
@@ -176,7 +177,7 @@ export async function sync(input: SyncInput, callbacks: SyncCallbacks): Promise<
 
     const handle = await local.workspaces.create({
       source: { kind: "worktree", cwd: root, action: "checkout", refName: branch },
-      title: d.branch ?? wantedBranch,
+      title: mirrorTitle(d.branch ?? wantedBranch),
     });
     localWorkspaceId = handle.id;
     directory = handle.directory ?? (await handle.refresh())?.workspaceDirectory ?? "";

@@ -2,6 +2,8 @@ export interface WorkspaceEntry {
   id: string;
   workspaceDirectory?: string | null;
   gitRuntime?: unknown;
+  name?: string | null;
+  title?: string | null;
 }
 
 type WorkspaceUpdate = { kind: "upsert"; workspace: unknown } | { kind: "remove"; id: string };
