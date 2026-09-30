@@ -7,6 +7,8 @@
  * idles so the output can still be captured before the terminal is killed.
  */
 
+import { AUTH_URL, q } from "../shared/commands";
+
 export interface HostWorkspace {
   id: string;
   name?: string | null;
@@ -45,10 +47,7 @@ export interface HostApi {
   };
 }
 
-/** Single-quote for a POSIX shell. */
-export function q(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`;
-}
+export { q };
 
 /** `~/x` to `"$HOME"/x`, since a tilde inside quotes never expands. */
 export function homePath(value: string): string {
@@ -68,8 +67,6 @@ function captureText(result: unknown): string {
   if (typeof value?.content === "string") return value.content;
   return "";
 }
-
-const AUTH_URL = /https:\/\/login\.tailscale\.com\/[^\s'"]+/;
 
 export interface RunOptions {
   /** Seconds before giving up. */

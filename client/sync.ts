@@ -1,5 +1,16 @@
-import type { Description, SyncRecord } from "../shared/contracts";
-import { homePath, q, runScript, type HostApi } from "./remote";
+import {
+  DEPENDENCY_FILES,
+  MANIFEST_FILE,
+  MIRROR_FILE,
+  SSH_OPTS,
+  listDeletedCommand,
+  manifestCommand,
+  q,
+  tarChangedCommand,
+} from "../shared/commands";
+import type { Description, Mirror, SyncRecord } from "../shared/contracts";
+import { MANIFEST_SCRIPT } from "../shared/manifest";
+import { homePath, runScript, type HostApi } from "./remote";
 
 /**
  * Mirror one server workspace onto the local host.
@@ -11,6 +22,8 @@ import { homePath, q, runScript, type HostApi } from "./remote";
  *      which runs the project's own worktree.setup there
  *   4. reset that worktree to the fetched commit, then stream the uncommitted
  *      files — as git lists them — over SSH and unpack them on top
+ *   5. mark the worktree as a mirror in its own git dir, so the plugin on the
+ *      local host can warn about edits there and pull later changes itself
  *
  * One-way, server to local. Only a worktree this plugin created is ever reset;
  * the local main checkout and any other worktree are never touched.
@@ -25,6 +38,8 @@ export interface SyncCallbacks {
 }
 
 export interface SyncInput {
+  serverId: string;
+  serverLabel: string;
   serverWorkspaceId: string;
   description: Description;
   localServerId: string;
@@ -34,10 +49,6 @@ export interface SyncInput {
 }
 
 export class SyncError extends Error {}
-
-const SSH_OPTS = "-o StrictHostKeyChecking=accept-new -o ConnectTimeout=15";
-
-const DEPENDENCY_FILES = /(^|\/)(package\.json|pnpm-lock\.yaml|package-lock\.json|yarn\.lock|bun\.lockb?)$/;
 
 /** `github.com/owner/repo` from any ssh/https remote form. */
 export function normaliseOrigin(url: string | null | undefined): string | null {
@@ -180,11 +191,16 @@ export async function sync(input: SyncInput, callbacks: SyncCallbacks): Promise<
     "apply",
     `Applying ${d.changed.length} changed and ${d.deleted.length} deleted file${d.changed.length + d.deleted.length === 1 ? "" : "s"}`,
   );
-  const remoteDir = q(d.workspaceDirectory);
-  const listChanged =
-    `cd ${remoteDir} && { git diff -z --name-only --no-renames --diff-filter=d HEAD; ` +
-    `git ls-files -z --others --exclude-standard; } | tar --null -T - -cf -`;
-  const listDeleted = `cd ${remoteDir} && git diff --name-only --no-renames --diff-filter=D HEAD`;
+  const mirror: Mirror = {
+    serverId: input.serverId,
+    serverLabel: input.serverLabel,
+    serverWorkspaceId: input.serverWorkspaceId,
+    sshTarget: d.sshTarget,
+    serverDirectory: d.workspaceDirectory,
+    branch,
+    head: d.head,
+    syncedAt: new Date().toISOString(),
+  };
 
   await run(
     [
@@ -196,8 +212,13 @@ export async function sync(input: SyncInput, callbacks: SyncCallbacks): Promise<
       // generating untracked files. Ignored files (node_modules, .env) are
       // never touched either way, because -x is not passed.
       reusable ? `git clean -fdq` : `true`,
-      `ssh ${SSH_OPTS} ${q(d.sshTarget)} ${q(listDeleted)} | while IFS= read -r f; do rm -f -- "$f"; done`,
-      `ssh ${SSH_OPTS} ${q(d.sshTarget)} ${q(listChanged)} | tar -xf - -C .`,
+      // Manifest before files: if the server changes mid-sync, the next
+      // check reports it rather than missing it.
+      `gitdir="$(git rev-parse --absolute-git-dir)"`,
+      `ssh ${SSH_OPTS} ${q(d.sshTarget)} ${q(manifestCommand(d.workspaceDirectory, MANIFEST_SCRIPT, ""))} | grep -E '^[HDF] ' > "$gitdir/${MANIFEST_FILE}"`,
+      `ssh ${SSH_OPTS} ${q(d.sshTarget)} ${q(listDeletedCommand(d.workspaceDirectory))} | while IFS= read -r f; do rm -f -- "$f"; done`,
+      `ssh ${SSH_OPTS} ${q(d.sshTarget)} ${q(tarChangedCommand(d.workspaceDirectory))} | tar -xf - -C .`,
+      `printf '%s\\n' ${q(JSON.stringify(mirror, null, 2))} > "$gitdir/${MIRROR_FILE}"`,
       `echo "APPLIED=1"`,
     ].join("\n"),
     anchor,
@@ -212,7 +233,7 @@ export async function sync(input: SyncInput, callbacks: SyncCallbacks): Promise<
     localProjectRoot: root,
     branch,
     head: d.head,
-    syncedAt: new Date().toISOString(),
+    syncedAt: mirror.syncedAt,
   };
 
   const depsChanged = d.changed.some((file) => DEPENDENCY_FILES.test(file));

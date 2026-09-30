@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { DEFAULT_SETTINGS, SettingsSchema, RecordSchema, type Settings, type SyncRecord } from "../shared/contracts";
+import { DEFAULT_SETTINGS, SettingsSchema, RecordSchema, type Role, type Settings, type SyncRecord } from "../shared/contracts";
 
 const FILE = path.join(os.homedir(), ".config", "paseo-local-sync", "state.json");
 
@@ -35,6 +35,12 @@ export function detectSshTarget(): string {
     // No Tailscale CLI; fall back to the plain hostname.
   }
   return `${user}@${os.hostname()}`;
+}
+
+/** "auto": a desktop OS is where you test, anything else is where you work. */
+export function effectiveRole(settings: Settings): Role {
+  if (settings.role !== "auto") return settings.role;
+  return process.platform === "darwin" || process.platform === "win32" ? "local" : "remote";
 }
 
 export function loadSettings(): Settings {

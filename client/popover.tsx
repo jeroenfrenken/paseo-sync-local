@@ -79,6 +79,8 @@ export function SyncPopover(props: SyncPopoverProps) {
       const { settings } = await rpc.current.loadSettings({});
       const next = await sync(
         {
+          serverId: props.host.id,
+          serverLabel: props.host.label,
           serverWorkspaceId: props.workspaceId,
           description: fresh,
           localServerId: local.serverId,
