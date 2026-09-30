@@ -171,7 +171,7 @@ export function remoteButtons(client: PluginClientContext): () => void {
       registration: client.addHeaderButton({
         id: "local-sync",
         workspaceId: workspace.id,
-        button: { title: "", icon: SyncIcon, label: "Sync local", behavior: { kind: "action", onPress: () => {} } },
+        button: { title: "Sync local", icon: SyncIcon, label: "Sync local", behavior: { kind: "action", onPress: () => {} } },
       }),
     };
     buttons.set(workspace.id, entry);
