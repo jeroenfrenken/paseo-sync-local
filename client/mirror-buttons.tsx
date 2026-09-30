@@ -4,6 +4,8 @@
  *     Clicking it checks the server again.
  *   - "Pull n", only while the server workspace has changes. One click pulls;
  *     with local edits at stake it drops down a single confirm item instead.
+ * When the server workspace is archived, its mirror is archived too, unless
+ * it holds local edits; then the badge says so and leaves it to you.
  * Other workspaces are left alone.
  */
 import {
@@ -23,7 +25,14 @@ const RESULT_VISIBLE_MS = 6_000;
 
 const NOTHING: PluginButtonBehavior = { kind: "action", onPress: () => {} };
 
+interface ServerWorkspaces {
+  workspaces: WorkspaceFeed & {
+    ref(id: string): { refresh(): Promise<{ archivedAt?: string | null } | null> };
+  };
+}
+
 interface Entry {
+  localWorkspaceId: string;
   directory: string;
   mirror: Mirror;
   badge: PluginButtonRegistration;
@@ -32,6 +41,8 @@ interface Entry {
   checking: boolean;
   pulling: boolean;
   pullAuthUrl: string | null;
+  /** The server workspace is archived but this mirror holds local edits. */
+  orphaned: boolean;
   /** A finished pull's outcome, shown on the pull button for a moment. */
   result: { ok: boolean; message: string } | null;
   resultTimer: ReturnType<typeof setTimeout> | null;
@@ -48,6 +59,16 @@ export function mirrorButtons(client: PluginClientContext): () => void {
     const changes = entry.check?.remoteChanges ?? 0;
     const edits = entry.check?.localEdits ?? 0;
     const synced = new Date(entry.mirror.syncedAt).toLocaleString();
+
+    if (entry.orphaned) {
+      entry.badge.update({
+        label: `Archived on ${server} · ${edits} local edit${edits === 1 ? "" : "s"}`,
+        title: `The ${entry.mirror.branch} workspace was archived on ${server}. This mirror was kept because it has edits of its own; archive it yourself when you are done.`,
+        behavior: NOTHING,
+      });
+      entry.pull.update({ visible: false });
+      return;
+    }
 
     entry.badge.update({
       label: entry.checking ? "Checking…" : edits > 0 ? `Mirror · ${edits} local edit${edits === 1 ? "" : "s"}` : "Mirror",
@@ -175,7 +196,7 @@ export function mirrorButtons(client: PluginClientContext): () => void {
 
   /** `force` is a click: it also retries after a Tailscale login prompt. */
   function runCheck(entry: Entry, force = false) {
-    if (stopped || entry.pulling || entry.checking) return;
+    if (stopped || entry.pulling || entry.checking || entry.orphaned) return;
     if (!force && entry.check?.authUrl) return;
     entry.checking = force;
     if (force) render(entry);
@@ -199,7 +220,39 @@ export function mirrorButtons(client: PluginClientContext): () => void {
     }, delay);
   }
 
-  /** Server-side git activity on a mirrored workspace triggers a check. */
+  /**
+   * Archives the mirror when its server workspace is gone. Asks the server
+   * directly rather than trusting an event, and never archives over local edits.
+   */
+  async function followArchive(entry: Entry) {
+    if (stopped || entry.orphaned || entry.pulling) return;
+    let api: ServerWorkspaces;
+    try {
+      api = getPaseoClient(entry.mirror.serverId) as unknown as ServerWorkspaces;
+    } catch {
+      return; // server not connected: cannot tell
+    }
+    const server = await api.workspaces
+      .ref(entry.mirror.serverWorkspaceId)
+      .refresh()
+      .catch(() => undefined);
+    if (server === undefined || (server && !server.archivedAt)) return;
+
+    const check = await client.rpc(checkMirror, { workspaceDirectory: entry.directory }).catch(() => null);
+    if (!check || check.localEdits === null) return;
+    if (check.localEdits > 0) {
+      entry.check = check;
+      entry.orphaned = true;
+      render(entry);
+      return;
+    }
+    const result = await client.paseo.workspaces.archive(entry.localWorkspaceId).catch((error: unknown) => ({
+      error: errorText(error),
+    }));
+    if (result.error) console.warn("[local-sync] could not archive mirror", result.error);
+  }
+
+  /** Server-side activity on a mirrored workspace triggers a check; removal, an archive check. */
   function watchServer(serverId: string) {
     if (serverFeeds.has(serverId)) return;
     try {
@@ -208,9 +261,13 @@ export function mirrorButtons(client: PluginClientContext): () => void {
         const entry = buttons.get(id);
         if (entry) scheduleCheck(entry, SERVER_CHANGE_DEBOUNCE_MS);
       };
+      const removed = (id: string) => {
+        const entry = buttons.get(id);
+        if (entry) void followArchive(entry);
+      };
       serverFeeds.set(
         serverId,
-        followWorkspaces(api.workspaces, (workspace) => touch(workspace.id), touch),
+        followWorkspaces(api.workspaces, (workspace) => touch(workspace.id), removed),
       );
     } catch {
       // Host not connected yet; the periodic check retries.
@@ -249,12 +306,14 @@ export function mirrorButtons(client: PluginClientContext): () => void {
         if (!mirror) return;
 
         const entry: Entry = {
+          localWorkspaceId: workspace.id,
           directory,
           mirror,
           check: null,
           checking: false,
           pulling: false,
           pullAuthUrl: null,
+          orphaned: false,
           result: null,
           resultTimer: null,
           pending: null,
@@ -274,6 +333,8 @@ export function mirrorButtons(client: PluginClientContext): () => void {
         render(entry);
         watchServer(mirror.serverId);
         scheduleCheck(entry, 2_000);
+        // Catch up on archives that happened while this app was closed.
+        void followArchive(entry);
       })
       .catch((error: unknown) => console.warn("[local-sync] could not read mirror", error));
   }
@@ -283,6 +344,7 @@ export function mirrorButtons(client: PluginClientContext): () => void {
     for (const entry of buttons.values()) {
       watchServer(entry.mirror.serverId);
       runCheck(entry);
+      void followArchive(entry);
     }
   }, CHECK_EVERY_MS);
 

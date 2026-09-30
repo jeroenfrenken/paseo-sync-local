@@ -26,7 +26,9 @@ anything else remote.
   there are not synced back (click it to check the server now). A **Pull n**
   button appears only while the server workspace has changes; one click brings
   them in. With local edits at stake it drops down a single *Discard and pull*
-  item instead. Other workspaces are left alone.
+  item instead. Archiving the workspace on the remote archives its mirror too,
+  unless the mirror has local edits; then the badge says so and leaves it to
+  you. Other workspaces are left alone.
 
 ## How it works
 
